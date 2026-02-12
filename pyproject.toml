@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sqnm"
+version = "1.2"
+description = "Implementation of the SQNM optimization method"
+requires-python = ">=3.9"
+license = "GPL-3.0-or-later"
+authors = [{name = "Moritz Gubler"}, {name = "Anubhab Haldar"}]
+dependencies = ["numpy"]
+
+[project.urls]
+Homepage = "https://github.com/moritzgubler/vc-sqnm"
+
+[project.optional-dependencies]
+ase = ["ase"]
