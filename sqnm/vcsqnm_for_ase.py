@@ -68,9 +68,9 @@ class ASEOptimizer:
         atoms.set_positions(self.positions.T)
 
     def _get_derivative_norm(self) -> float:
-        force_norm = float(np.max(np.abs(self.forces)))
+        force_norm = float(np.max(np.linalg.norm(self.forces, axis=1)))
         if self.vc_relax:
-            force_norm = max(force_norm, float(np.max(np.abs(self._get_lattice_derivative()))))
+            force_norm = max(force_norm, float(np.max(np.linalg.norm(self._get_lattice_derivative(), axis=1))))
         return force_norm
 
     def optimize(self, trajectory_filename: str | None = None) -> Atoms:

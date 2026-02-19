@@ -47,6 +47,71 @@ class SQNM:
         self.gainratio = 0.0
         self.nhist = 0
 
+    def _build_subspace_hessian(self, nh: int) -> int:
+        nd = self.x_list.normalized_diff
+
+        self.s_evec[:nh, :nh] = nd[:, :nh].T @ nd[:, :nh]
+        self.s_eval[:nh], self.s_evec[:nh, :nh] = np.linalg.eigh(
+            self.s_evec[:nh, :nh]
+        )
+
+        dim = int(np.sum(self.s_eval[:nh] / self.s_eval[nh - 1] > self.eps_subsp))
+        self.dim_subspace = dim
+        self.s_eval[:dim] = self.s_eval[nh - dim : nh]
+        self.s_evec[:, :dim] = self.s_evec[:, nh - dim : nh]
+
+        inv_sqrt_s = 1.0 / np.sqrt(self.s_eval[:dim])
+        diff_inv_norms = 1.0 / np.linalg.norm(self.x_list.diff[:, :nh], axis=0)
+
+        self.dr_subsp[:, :dim] = (
+            np.einsum("hi,kh->ki", self.s_evec[:nh, :dim], nd[:, :nh])
+            * inv_sqrt_s
+        )
+        self.df_subsp[:, :dim] = (
+            np.einsum(
+                "hi,kh,h->ki",
+                self.s_evec[:nh, :dim],
+                self.f_list.diff[:, :nh],
+                diff_inv_norms,
+            )
+            * inv_sqrt_s
+        )
+
+        self.h_evec_subsp[:dim, :dim] = 0.5 * (
+            self.df_subsp[:, :dim].T @ self.dr_subsp[:, :dim]
+            + self.dr_subsp[:, :dim].T @ self.df_subsp[:, :dim]
+        )
+        self.h_eval[:dim], self.h_evec_subsp[:dim, :dim] = np.linalg.eigh(
+            self.h_evec_subsp[:dim, :dim]
+        )
+
+        self.h_evec[:, :dim] = np.einsum(
+            "ki,hk->hi", self.h_evec_subsp[:dim, :dim], self.dr_subsp[:, :dim]
+        )
+
+        self.res[:dim] = np.linalg.norm(
+            -self.h_eval[:dim] * self.h_evec[:, :dim]
+            + self.df_subsp[:, :dim] @ self.h_evec_subsp[:dim, :dim],
+            axis=0,
+        )
+
+        self.h_eval[:dim] = np.sqrt(self.h_eval[:dim] ** 2 + self.res[:dim] ** 2)
+
+        return dim
+
+    def _solve_trust_region_subproblem(self, df: np.ndarray, dim: int) -> None:
+        projections = self.h_evec[:, :dim].T @ df
+        self.dir_of_descent = self.alpha * (
+            df - np.einsum("i,ki->k", projections, self.h_evec[:, :dim])
+        )
+        self.dir_of_descent += np.einsum(
+            "i,ki,i->k",
+            projections,
+            self.h_evec[:, :dim],
+            1.0 / self.h_eval[:dim],
+        )
+        self.dir_of_descent = -self.dir_of_descent
+
     def step(self, x: np.ndarray, f: float, df: np.ndarray) -> np.ndarray:
         if np.linalg.norm(df) < 1e-12:
             self.dir_of_descent[:] = 0.0
@@ -84,67 +149,8 @@ class SQNM:
                 if self.gainratio > 1.05:
                     self.alpha *= 1.05
 
-            nh = self.nhist
-            nd = self.x_list.normalized_diff
-
-            self.s_evec[:nh, :nh] = nd[:, :nh].T @ nd[:, :nh]
-            self.s_eval[:nh], self.s_evec[:nh, :nh] = np.linalg.eigh(
-                self.s_evec[:nh, :nh]
-            )
-
-            dim = int(np.sum(self.s_eval[:nh] / self.s_eval[nh - 1] > self.eps_subsp))
-            self.dim_subspace = dim
-            self.s_eval[:dim] = self.s_eval[nh - dim : nh]
-            self.s_evec[:, :dim] = self.s_evec[:, nh - dim : nh]
-
-            inv_sqrt_s = 1.0 / np.sqrt(self.s_eval[:dim])
-            diff_inv_norms = 1.0 / np.linalg.norm(self.x_list.diff[:, :nh], axis=0)
-
-            self.dr_subsp[:, :dim] = (
-                np.einsum("hi,kh->ki", self.s_evec[:nh, :dim], nd[:, :nh])
-                * inv_sqrt_s
-            )
-            self.df_subsp[:, :dim] = (
-                np.einsum(
-                    "hi,kh,h->ki",
-                    self.s_evec[:nh, :dim],
-                    self.f_list.diff[:, :nh],
-                    diff_inv_norms,
-                )
-                * inv_sqrt_s
-            )
-
-            self.h_evec_subsp[:dim, :dim] = 0.5 * (
-                self.df_subsp[:, :dim].T @ self.dr_subsp[:, :dim]
-                + self.dr_subsp[:, :dim].T @ self.df_subsp[:, :dim]
-            )
-            self.h_eval[:dim], self.h_evec_subsp[:dim, :dim] = np.linalg.eigh(
-                self.h_evec_subsp[:dim, :dim]
-            )
-
-            self.h_evec[:, :dim] = np.einsum(
-                "ki,hk->hi", self.h_evec_subsp[:dim, :dim], self.dr_subsp[:, :dim]
-            )
-
-            self.res[:dim] = np.linalg.norm(
-                -self.h_eval[:dim] * self.h_evec[:, :dim]
-                + self.df_subsp[:, :dim] @ self.h_evec_subsp[:dim, :dim],
-                axis=0,
-            )
-
-            self.h_eval[:dim] = np.sqrt(self.h_eval[:dim] ** 2 + self.res[:dim] ** 2)
-
-            projections = self.h_evec[:, :dim].T @ df
-            self.dir_of_descent = self.alpha * (
-                df - np.einsum("i,ki->k", projections, self.h_evec[:, :dim])
-            )
-            self.dir_of_descent += np.einsum(
-                "i,ki,i->k",
-                projections,
-                self.h_evec[:, :dim],
-                1.0 / self.h_eval[:dim],
-            )
-            self.dir_of_descent = -self.dir_of_descent
+            dim = self._build_subspace_hessian(self.nhist)
+            self._solve_trust_region_subproblem(df, dim)
 
         self.expected_positions = x + self.dir_of_descent
         self.prev_f = f
